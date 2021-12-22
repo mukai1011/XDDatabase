@@ -198,6 +198,12 @@ namespace XDDatabase
                     if (res.HP == key && res.pIndex == pIndex && res.eIndex == eIndex)
                     if (next.HP == key2 && next.pIndex == pIndex2 && next.eIndex == eIndex2)
                             WriteLine($"{h8 << 24 | seed:X8} {next.seed:X8}");
+
+                    // 『単一のseed(24bit)に対し、上位8bitだけ異なるが、Generateを通すと同じseedに帰着する』という例が存在するため、この検索処理では不完全。
+                    // (検索結果の重複がごくごくまれに発生してしまう)
+                    // デオキシス サンダー 257 648 326 281
+                    // ジラーチ サンダー 349 325 336 313
+                    // ↑ の結果、0xF03F7EC1が重複して出力される。
                 }
             }
         }
