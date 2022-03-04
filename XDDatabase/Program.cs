@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading.Tasks;
 using static System.Console;
 using static XDDatabase.Input;
+using PokemonPRNG.LCG32.GCLCG;
 
 namespace XDDatabase
 {
@@ -14,113 +15,86 @@ namespace XDDatabase
     {
         static void Main(string[] args)
         {
-            // MakeDB();
-            // Load().CreateDB();
-            while (true)
-            {
-                LoadDB().SearchSeed();
-            }
-            // Console.WriteLine($"終わったよ {DateTime.Now}");
-            // Console.ReadKey();
-        }
-        static void MakeDB()
-        {
-            Console.Write("上書きとか発生するけどええんか？ (承諾するならy+Enter)> ");
-            if (Console.ReadLine() != "y") return;
-            MakeSeedDB();
-            Console.WriteLine($"計算終了...重複の除去に進みます... {DateTime.Now}");
-            Distinct();
-        }
-        static void MakeSeedDB()
-        {
-            var fs = Enumerable.Range(0, 0x100).Select(_ => new BinaryWriter(new FileStream($"./Data/{_:X}.bin", FileMode.Create))).ToArray();
-            Parallel.For(0, 0x1000000, low24 =>
-            {
-                var seedList = Enumerable.Range(0, 0x100).Select(_ => Generate(((uint)_ << 24) | (uint)low24).seed & 0xFFFFFF).Distinct();
-                foreach (var seed in seedList)
-                {
-                    var key = seed >> 16;
-                    ushort data = (ushort)(seed & 0xFFFF);
-                    lock (fs[key]) { fs[key].Write(data); }
-                }
-            });
-            foreach (var s in fs) s.Dispose();
-        }
-        static void Distinct()
-        {
-            for(uint i=0x0; i<0x100; i++)
-            {
-                Console.WriteLine(i);
-                using(var br = new BinaryReader(new FileStream($"./Data/{i:X}.bin", FileMode.Open)))
-                using (var wfs = new BinaryWriter(new FileStream($"./Distinct/{i:X}.bin", FileMode.Create)))
-                {
-                    var bs = br.BaseStream;
-                    var seedList = new List<uint>();
-                    while(bs.Position != bs.Length)
-                    {
-                        uint seed = (i << 16) | br.ReadUInt16();
-                        seedList.Add(seed);
-                    }
-                    foreach(var seed in seedList.Distinct())
-                    {
-                        wfs.Write((ushort)(seed & 0xFFFF));
-                    }
-                }
-            }
+            WriteLine($"開始 {DateTime.Now}");
+            PreAdvance.GetSeeds().CreateDB();
+            WriteLine($"終わったよ {DateTime.Now}");
+            ReadKey();
+
+            // LoadDB().SearchSeed(0x10000); // TSVがわかっているなら入力したほうがいいです。
         }
 
-        static List<uint> LoadData()
-        {
-            var seedList = new List<uint>();
-            for (uint i = 0x0; i < 0x100; i++)
-            {
-                using (var br = new BinaryReader(new FileStream($"./Distinct/{i:X}.bin", FileMode.Open)))
-                {
-                    var bs = br.BaseStream;
-                    while (bs.Position != bs.Length)
-                    {
-                        uint seed = (i << 16) | br.ReadUInt16();
-                        seedList.Add(seed);
-                    }
-                }
-            }
-            Console.WriteLine($"{seedList.Count}個のseedを読み込みました.");
-
-            return seedList;
-        }
-        static void CreateDB(this List<uint> seedList)
+        static void CreateDB(this uint[] seedList)
         {
             var table = new List<(uint hp, uint seed)>();
-            for (int i = 0; i < seedList.Count; i++)
+            for (int i = 0; i < seedList.Length; i++)
             {
-                Console.SetCursorPosition(0, Console.CursorTop);
-                Console.Write($"{i} / {seedList.Count}");
-                uint seed = seedList[i];
-                var temp = new List<uint>();
+                SetCursorPosition(0, CursorTop);
+                Write($"{i} / {seedList.Length}");
+
+                var seed = seedList[i];
+                var set = new HashSet<uint>();
                 for (uint h = 0; h < 0x100; h++)
                 {
-                    temp.Add(Generate((h << 24) | seed).HP);
-                }
-                foreach (var hp in temp.Distinct())
-                {
-                    table.Add((hp, seed));
+                    var hp = Generate((h << 24) | seed).HP;
+                    if (!set.Contains(hp))
+                    {
+                        table.Add((hp, seed));
+                        set.Add(hp);
+                    }
                 }
             }
+
+            WriteLine();
+            WriteLine($"Sort {DateTime.Now}");
+
             table.Sort((a, b) => a.hp.CompareTo(b.hp));
-            using (var bw = new BinaryWriter(new FileStream(@"./Completed/XDDB.bin", FileMode.Create)))
+            if (!Directory.Exists("./Result"))
+                Directory.CreateDirectory("./Result");
+            using (var bw = new BinaryWriter(new FileStream(@"./Result/XDDB.bin", FileMode.Create)))
             {
-                foreach(var item in table)
+                foreach (var (hp, seed) in table)
                 {
-                    bw.Write(item.hp);
-                    bw.Write(item.seed);
+                    bw.Write(hp);
+                    bw.Write(seed);
                 }
             }
+        }
+
+        public static (uint HP, uint seed) Generate(uint seed)
+        {
+            seed.Advance(4); // PlaynerName + playerTeam + enemyTeam + ???
+
+            var EnemyTSV = seed.GetRand() ^ seed.GetRand();
+
+            seed.Advance(2);
+            var h0 = seed.GetRand() & 0x1F;
+            seed.Advance(2);
+            while (true) { if ((seed.GetRand() ^ seed.GetRand() ^ EnemyTSV) >= 8) break; }
+            h0 += seed.GenerateEVs() / 4;
+
+            seed.Advance(2);
+            var h1 = seed.GetRand() & 0x1F;
+            seed.Advance(2);
+            while (true) { if ((seed.GetRand() ^ seed.GetRand() ^ EnemyTSV) >= 8) break; }
+            h1 += seed.GenerateEVs() / 4;
+
+            seed.Advance(5);
+            var h2 = seed.GetRand() & 0x1F;
+            seed.Advance(4); // 色回避は考えない、いいね？
+            h2 += seed.GenerateEVs() / 4;
+
+            seed.Advance(2);
+            var h3 = seed.GetRand() & 0x1F;
+            seed.Advance(4); // 色回避は考えない、いいね？
+            h3 += seed.GenerateEVs() / 4;
+
+            return ((h0 << 24) | (h1 << 16) | (h2 << 8) | (h3), seed);
         }
 
         static List<(uint hp, uint seed)> LoadDB()
         {
             var seedList = new List<(uint, uint)>();
-            using (var br = new BinaryReader(new FileStream($"./Completed/XDDB.bin", FileMode.Open)))
+            using (var br = new BinaryReader(new FileStream($"./Result/XDDB.bin", FileMode.Open)))
             {
                 var bs = br.BaseStream;
                 while (bs.Position != bs.Length)
@@ -128,11 +102,11 @@ namespace XDDatabase
                     seedList.Add((br.ReadUInt32(), br.ReadUInt32()));
                 }
             }
-            Console.WriteLine($"{seedList.Count}個のseedを読み込みました.");
+            WriteLine($"{seedList.Count}個のseedを読み込みました.");
 
             return seedList;
         } 
-        static void SearchSeed(this List<(uint hp, uint seed)> database)
+        static void SearchSeed(this List<(uint hp, uint seed)> database, uint playersTSV)
         {
             var pBaseHP = new (uint First, uint Second)[]
             {
@@ -193,8 +167,8 @@ namespace XDDatabase
             {
                 for(uint h8 = 0; h8<0x100; h8++)
                 {
-                    var res = Generate(h8 << 24 | seed);
-                    var next = Generate(res.seed);
+                    var res = GenerateQuickBattle(h8 << 24 | seed, playersTSV);
+                    var next = GenerateQuickBattle(res.seed, playersTSV);
                     if (res.HP == key && res.pIndex == pIndex && res.eIndex == eIndex)
                     if (next.HP == key2 && next.pIndex == pIndex2 && next.eIndex == eIndex2)
                             WriteLine($"{h8 << 24 | seed:X8} {next.seed:X8}");
@@ -204,19 +178,13 @@ namespace XDDatabase
                     // デオキシス サンダー 257 648 326 281
                     // ジラーチ サンダー 349 325 336 313
                     // ↑ の結果、0xF03F7EC1が重複して出力される。
+
+                    // また、XDDB.binはプレイヤー側のPID再計算が発生することを考慮していないので、たま～に結果が出ないことがあります。
                 }
             }
         }
 
-        static uint Advance(ref this uint seed)
-        {
-            return (seed = seed * 0x343FD + 0x269EC3);
-        }
-        static uint GetRand(ref this uint seed)
-        {
-            return (seed = seed * 0x343FD + 0x269EC3) >> 16;
-        }
-        public static (uint pIndex, uint eIndex, uint HP, uint seed) Generate(uint seed)
+        public static (uint pIndex, uint eIndex, uint HP, uint seed) GenerateQuickBattle(uint seed, uint pTsv = 0x10000)
         {
             seed.Advance(); // PlaynerName
             var playerTeamIndex = seed.GetRand() % 5;
@@ -224,12 +192,12 @@ namespace XDDatabase
 
             var hp = new uint[4];
 
-            seed.Advance(); 
+            seed.Advance();
             uint EnemyTSV = seed.GetRand() ^ seed.GetRand();
 
             // 相手1匹目
-            seed.Advance(); // dummyPID
-            seed.Advance(); // dummyPID
+            seed.Advance(); 
+            seed.Advance();
             hp[0] = seed.GetRand() & 0x1F;
             seed.Advance(); // SCD
             seed.Advance(); // Ability
@@ -245,8 +213,9 @@ namespace XDDatabase
             while (true) { if ((seed.GetRand() ^ seed.GetRand() ^ EnemyTSV) >= 8) break; }
             hp[1] += seed.GenerateEVs() / 4;
 
-            seed.Advance(); 
-            uint PlayerTSV = seed.GetRand() ^ seed.GetRand();
+            seed.Advance();
+            seed.Advance();
+            seed.Advance();
 
             // プレイヤー1匹目
             seed.Advance();
@@ -254,7 +223,7 @@ namespace XDDatabase
             hp[2] = seed.GetRand() & 0x1F;
             seed.Advance();
             seed.Advance();
-            while (true) { if ((seed.GetRand() ^ seed.GetRand() ^ PlayerTSV) >= 8) break; }
+            while (true) { if ((seed.GetRand() ^ seed.GetRand() ^ pTsv) >= 8) break; }
             hp[2] += seed.GenerateEVs() / 4;
 
             // プレイヤー2匹目
@@ -263,37 +232,10 @@ namespace XDDatabase
             hp[3] = seed.GetRand() & 0x1F;
             seed.Advance();
             seed.Advance();
-            while (true) { if ((seed.GetRand() ^ seed.GetRand() ^ PlayerTSV) >= 8) break; }
+            while (true) { if ((seed.GetRand() ^ seed.GetRand() ^ pTsv) >= 8) break; }
             hp[3] += seed.GenerateEVs() / 4;
 
-            return (playerTeamIndex, enemyTeamIndex, (hp[0]<<24) + (hp[1] << 16) + (hp[2] << 8) + (hp[3]), seed);
-        }
-        private static uint GenerateEVs(ref this uint seed)
-        {
-            var EVs = new byte[6];
-            int sumEV = 0;
-            for (var i = 0; i < 101; i++)
-            {
-                for (int j = 0; j < 6; j++)
-                {
-                    byte ev = (byte)(seed.GetRand() & 0xFF);
-                    EVs[j] += ev;
-                }
-                sumEV = EVs.Sum(_ => _);
-
-                if (sumEV == 510) return EVs[0];
-                if (sumEV <= 490) continue;
-                if (sumEV < 530) break;
-                if (i != 100) EVs = new byte[6];
-            }
-            var k = 0;
-            while (sumEV != 510)
-            {
-                if (sumEV < 510 && EVs[k] < 255) { EVs[k]++; sumEV++; }
-                if (sumEV > 510 && EVs[k] != 0) { EVs[k]--; sumEV--; }
-                k = (k + 1) % 6;
-            }
-            return EVs[0];
+            return (playerTeamIndex, enemyTeamIndex, (hp[0] << 24) + (hp[1] << 16) + (hp[2] << 8) + (hp[3]), seed);
         }
     }
     static class Input
@@ -322,5 +264,295 @@ namespace XDDatabase
 
         static public string ScanStr() { return ReadLine(); }
         static public string[] ScanStrArray() { return ScanStr().Split(); }
+    }
+
+    static class EVsExt
+    {
+        public static void Shave(this byte[] evs)
+        {
+            var sum = evs.Sum(_ => _);
+
+            var k = 0;
+            while (sum > 510)
+            {
+                if (evs[k] != 0) { evs[k]--; sum--; }
+                if (++k == 6) k = 0;
+            }
+        }
+        public static void Fill(this byte[] evs)
+        {
+            var sum = evs.Sum(_ => _);
+
+            var k = 0;
+            while (sum < 510)
+            {
+                if (evs[k] < 255) { evs[k]++; sum++; }
+                if (++k == 6) k = 0;
+            }
+        }
+
+        private static readonly uint[] evsCache = new uint[0x1000000];
+
+        public static void GetSample(uint i)
+        {
+            WriteLine($"{evsCache[i] & 0xFFFFFF}");
+            WriteLine($"{evsCache[i + 10] & 0xFFFFFF}");
+            WriteLine($"{evsCache[i + 30] & 0xFFFFFF}");
+        }
+
+        // 努力値生成処理を通した後のseedを返します。
+        public static uint AdvanceEVs(this uint seed)
+        {
+            var ini = seed;
+
+            if (evsCache[seed & 0xFFFFFF] != 0) return ini.NextSeed(evsCache[seed & 0xFFFFFF] & 0xFFFFFF);
+
+            var seeds = new List<(uint ini, uint diff)>() { (seed & 0xFFFFFF, 0) };
+
+            var evs = new byte[6];
+            int sumEV = 0;
+            for (uint i = 0; i < 101; i++)
+            {
+                for (int j = 0; j < 6; j++) evs[j] += (byte)(seed.GetRand() & 0xFF);
+                sumEV = evs.Sum(_ => _);
+
+                if (sumEV == 510)
+                {
+                    var index = seed.GetIndex(ini);
+                    foreach (var (s, diff) in seeds)
+                        evsCache[s] = (index - diff) | ((uint)evs[0] << 24);
+
+                    return seed;
+                }
+
+                else if (sumEV <= 490) continue;
+
+                else if (sumEV < 530)
+                {
+                    evs.Fill();
+                    evs.Shave();
+
+                    var index = seed.GetIndex(ini);
+                    foreach (var (s, diff) in seeds)
+                        evsCache[s] = (index - diff) | ((uint)evs[0] << 24);
+
+                    return seed;
+                }
+
+                else if (i != 100)
+                {
+                    Array.Clear(evs, 0, 6);
+                    seeds.Add((seed & 0xFFFFFF, (i + 1) * 6u));
+                }
+            }
+
+            evs.Fill();
+            evs.Shave();
+
+            evsCache[ini & 0xFFFFFF] = seed.GetIndex(ini) | ((uint)evs[0] << 24);
+            return seed;
+        }
+
+        // 努力値生成処理を通し、HPの努力値を返します。
+        public static uint GenerateEVs(this ref uint seed)
+        {
+            var ini = seed;
+
+            if (evsCache[seed & 0xFFFFFF] != 0)
+            {
+                var val = evsCache[seed & 0xFFFFFF];
+                seed.Advance(val & 0xFFFFFF);
+                return val >> 24;
+            }
+
+            var seeds = new List<(uint ini, uint diff)>() { (seed & 0xFFFFFF, 0) };
+
+            var evs = new byte[6];
+            int sumEV = 0;
+            for (uint i = 0; i < 101; i++)
+            {
+                for (int j = 0; j < 6; j++) evs[j] += (byte)(seed.GetRand() & 0xFF);
+                sumEV = evs.Sum(_ => _);
+
+                if (sumEV == 510)
+                {
+                    var index = seed.GetIndex(ini);
+                    foreach (var (s, diff) in seeds)
+                        evsCache[s] = (index - diff) | ((uint)evs[0] << 24);
+
+                    return evs[0];
+                }
+
+                else if (sumEV <= 490) continue;
+
+                else if (sumEV < 530)
+                {
+                    evs.Fill();
+                    evs.Shave();
+                    var index = seed.GetIndex(ini);
+                    foreach (var (s, diff) in seeds)
+                        evsCache[s] = (index - diff) | ((uint)evs[0] << 24);
+
+                    return evs[0];
+                }
+
+                else if (i != 100)
+                {
+                    Array.Clear(evs, 0, 6);
+                    seeds.Add((seed & 0xFFFFFF, (i + 1) * 6u));
+                }
+            }
+
+            evs.Fill();
+            evs.Shave();
+
+            evsCache[ini & 0xFFFFFF] = seed.GetIndex(ini) | ((uint)evs[0] << 24);
+            return evs[0];
+        }
+    }
+
+    static class PreAdvance
+    {
+        private static void AdvanceStep1(uint seed, HashSet<uint> set, HashSet<uint> setInit)
+        {
+            var init = seed;
+            seed.Advance(4);
+            var enemyTSV = seed.GetRand() ^ seed.GetRand();
+
+            // 相手1匹目
+            seed = seed * 0x284A930Du + 0xA2974C77u; // advance 5
+            {
+                var psv = seed.GetRand() ^ seed.GetRand();
+                AdvanceStep2(seed, init, enemyTSV, set, setInit);
+                if (((psv ^ enemyTSV) & 0xFF) < 8)
+                {
+                    psv = seed.GetRand() ^ seed.GetRand();
+                    AdvanceStep2(seed, init, enemyTSV, set, setInit);
+                    if (((psv ^ enemyTSV) & 0xFF) < 8)
+                    {
+                        psv = seed.GetRand() ^ seed.GetRand();
+                        AdvanceStep2(seed, init, enemyTSV, set, setInit);
+                    }
+                }
+            }
+        }
+        private static void AdvanceStep2(uint seed, uint init, uint enemyTSV, HashSet<uint> set, HashSet<uint> setInit)
+        {
+            seed = seed.AdvanceEVs();
+
+            // 相手2匹目
+            seed = seed * 0x284A930Du + 0xA2974C77u; // advance 5
+            {
+                var psv = seed.GetRand() ^ seed.GetRand();
+                AdvanceStep3(seed, init, set, setInit);
+                if (((psv ^ enemyTSV) & 0xFF) < 8)
+                {
+                    psv = seed.GetRand() ^ seed.GetRand();
+                    AdvanceStep3(seed, init, set, setInit);
+                    if (((psv ^ enemyTSV) & 0xFF) < 8)
+                    {
+                        psv = seed.GetRand() ^ seed.GetRand();
+                        AdvanceStep3(seed, init, set, setInit);
+                    }
+                }
+            }
+        }
+        private static void AdvanceStep3(uint seed, uint init, HashSet<uint> set, HashSet<uint> setInit)
+        {
+            seed = seed.AdvanceEVs();
+
+            seed = seed * 0x67FBEEA9u + 0x77948382u; // advance 3 + 7
+            seed = seed.AdvanceEVs();
+
+            seed = seed * 0x0C287375u + 0x20AD96A9u; // advance 7
+            seed = seed.AdvanceEVs();
+
+            if (!set.Contains(seed & 0xFFFFFF))
+                setInit.Add(init);
+        }
+
+        private static void AdvanceSimple(uint seed, HashSet<uint> set)
+        {
+            seed = seed * 0x284A930Du + 0xA2974C77u; // advance 5
+
+            // 相手1匹目
+            seed = seed * 0x0C287375u + 0x20AD96A9u; // advance 7
+            seed = seed.AdvanceEVs();
+
+            // 相手2匹目
+            seed = seed * 0x0C287375u + 0x20AD96A9u; // advance 7
+            seed = seed.AdvanceEVs();
+
+            seed = seed * 0x67FBEEA9u + 0x77948382u; // advance 3 + 7
+            seed = seed.AdvanceEVs();
+
+            seed = seed * 0x0C287375u + 0x20AD96A9u; // advance 7
+            seed = seed.AdvanceEVs();
+
+            seed &= 0xFFFFFF;
+            set.Add(seed);
+        }
+
+        private static uint AdvanceStrict(uint seed)
+        {
+            seed.Advance(4);
+            var enemyTSV = seed.GetRand() ^ seed.GetRand();
+
+            // 相手1匹目
+            seed.Advance(5);
+            while (true) { if ((enemyTSV ^ seed.GetRand() ^ seed.GetRand()) >= 8) break; }
+            seed = seed.AdvanceEVs();
+
+            // 相手2匹目
+            seed.Advance(5);
+            while (true) { if ((enemyTSV ^ seed.GetRand() ^ seed.GetRand()) >= 8) break; }
+            seed = seed.AdvanceEVs();
+
+            seed = seed * 0x67FBEEA9u + 0x77948382u; // advance 3 + 7
+            seed = seed.AdvanceEVs();
+
+            seed = seed * 0x0C287375u + 0x20AD96A9u; // advance 7
+            seed = seed.AdvanceEVs();
+
+            return seed;
+        }
+
+        public static uint[] GetSeeds()
+        {
+            // 敵トレーナー側の色回避処理が発生しないと仮定して計算する。
+            var set = new HashSet<uint>();
+            {
+                for (uint seed = 0; seed < 0x1000000; seed++)
+                {
+                    AdvanceSimple(seed, set);
+                }
+            }
+
+            // 上位8bit次第で色回避が発生する可能性のある初期seedのうち、
+            // 終了時のseedが ↑ の結果に含まれないようなものだけ抜き出す。
+            var list = new HashSet<uint>();
+            {
+                for (uint seed = 0; seed < 0x1000000; seed++)
+                {
+                    AdvanceStep1(seed, set, list);
+                }
+            }
+
+            // 色回避が発生する可能性のある下位24bitに上位8bitを補って全探索して付け加える。
+            foreach (var u24 in list)
+            {
+                for (uint h8 = 0x0; h8 < 0x100; h8++)
+                {
+                    var seed = (h8 << 24) | u24;
+
+                    var res = AdvanceStrict(seed) & 0xFFFFFF;
+                    set.Add(res);
+                }
+            }
+
+            WriteLine($"パーティ生成後の候補: {set.Count}");
+
+            return set.ToArray();
+        }
     }
 }
