@@ -39,6 +39,7 @@ public class TestApp : ConsoleAppBase
     }
 }
 
+#pragma warning disable
 static class Input
 {
     public static void InputLine(out int a, out int b) { var input = ScanIntArray(); a = input[0]; b = input[1]; }
