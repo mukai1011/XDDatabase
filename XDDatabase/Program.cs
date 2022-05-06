@@ -74,8 +74,12 @@ public static class XDDatabase
 
     static List<(uint hp, uint seed)> LoadDB()
     {
+        var asm = System.Reflection.Assembly.GetExecutingAssembly();
+        var stream = asm.GetManifestResourceStream("XDDB.bin");
+        if (stream == null) throw new Exception();
+
         var seedList = new List<(uint, uint)>();
-        using (var br = new BinaryReader(new FileStream($"./Result/XDDB.bin", FileMode.Open)))
+        using (var br = new BinaryReader(stream))
         {
             var bs = br.BaseStream;
             while (bs.Position != bs.Length)
