@@ -15,4 +15,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <Target Name="Rename" AfterTargets="Publish">
+    <Move SourceFiles="$(PublishDir)\TestApp.exe" DestinationFiles="$(PublishDir)\XDDatabase.exe" />
+    <Message Text="Rename TestApp.exe -> XDDatabase.exe" Importance="high" />
+  </Target>
+
 </Project>
